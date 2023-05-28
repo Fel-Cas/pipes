@@ -38,8 +38,10 @@ int main(int argc, char *argv[]) {
 
     Matrix* matrix = create_matrix_from_file(p, f, c);
 
-    int fd[2];
-    if (pipe(fd) == -1) {
+    int parent_to_child[2];
+    int child_to_parent[2];
+    
+    if (pipe(parent_to_child) == -1 || pipe(child_to_parent) == -1) {
         perror("pipe");
         exit(1);
     }
@@ -50,57 +52,67 @@ int main(int argc, char *argv[]) {
         exit(1);
     } 
     if (pid == 0) {
-    dup2(fd[0], STDIN_FILENO);
-    close(fd[0]);
+        close(parent_to_child[1]);  // Close the write end of the parent-to-child pipe
+        close(child_to_parent[0]);  // Close the read end of the child-to-parent pipe
 
-    // Read the matrix from STDIN_FILENO
-    read(STDIN_FILENO, matrix, sizeof(Matrix));
+        // Read the matrix from the parent process
+        read(parent_to_child[0], matrix, sizeof(Matrix));
+        close(parent_to_child[0]);
 
-    printf("Original matrix:\n");
-    print_matrix(matrix);
+        printf("Child process received matrix:\n");
+        print_matrix(matrix);
 
+        Vector* min = matrix_col_min(matrix);
+        Vector* max = matrix_col_max(matrix);
 
-    Vector* min = matrix_col_min(matrix);
-    Vector* max = matrix_col_max(matrix);
+        // Write the vectors' elements to the parent process
+        
+        for (int i = 0; i < max->size; i++) {
+            write(child_to_parent[1], &(max->elements[i]), sizeof(double));
+        }
 
-    // Write the vectors' elements to STDOUT_FILENO
-    for (int i = 0; i < max->size; i++) {
-        write(fd[1], &(max->elements[i]), sizeof(double));
-    }
-
-    for (int i = 0; i < min->size; i++) {
-        write(fd[1], &(min->elements[i]), sizeof(double));
-    }
-    close(fd[1]);
+        for (int i = 0; i < min->size; i++) {
+            write(child_to_parent[1], &(min->elements[i]), sizeof(double));
+        }
+        close(child_to_parent[1]);
     exit(0);
-} else {
-    // Write the matrix to the pipe
-    write(fd[1], matrix, sizeof(Matrix));
-    close(fd[1]); // Close the write descriptor before waiting for the child process
-    wait(NULL);
+        close(child_to_parent[1]);
 
-    Vector* max = create_vector(matrix->cols);
-    Vector* min = create_vector(matrix->cols);
+        exit(0);
+    } else {
+        close(parent_to_child[0]);  // Close the read end of the parent-to-child pipe
+        close(child_to_parent[1]);  // Close the write end of the child-to-parent pipe
 
-    // Read the vector elements from STDOUT_FILENO
-    for (int i = 0; i < max->size; i++) {
-        read(fd[0], &(max->elements[i]), sizeof(double));
+        // Write the matrix to the child process
+        write(parent_to_child[1], matrix, sizeof(Matrix));
+        close(parent_to_child[1]);
+
+        wait(NULL);
+
+        Vector* max = create_vector(matrix->cols);
+        Vector* min = create_vector(matrix->cols);
+
+        // Read the vector elements from the child process
+       for (int i = 0; i < max->size; i++) {
+            read(child_to_parent[0], &(max->elements[i]), sizeof(double));
+        }
+
+        for (int i = 0; i < min->size; i++) {
+            read(child_to_parent[0], &(min->elements[i]), sizeof(double));
+        }
+        close(child_to_parent[0]);
+
+        printf("Parent process received vectors:\n");
+        printf("Vector of maximum numbers:\n");
+        print_vector(max);
+        printf("Vector of minimum numbers:\n");
+        print_vector(min);
+
+        normalize_matrix_column_formula_1(matrix, max, min);
+
+        printf("Normalized matrix:\n");
+        print_matrix(matrix);
     }
 
-    for (int i = 0; i < min->size; i++) {
-        read(fd[0], &(min->elements[i]), sizeof(double));
-    }
-    close(fd[0]);
-
-    printf("Vector de números maximos:\n");
-    print_vector(max);
-    printf("Vector de números minimos:\n");
-    print_vector(min);
-
-    normalize_matrix_column_formula_1(matrix, max, min);
-
-    printf("Matriz normalizada:\n");
-    print_matrix(matrix);
-}
     return 0;
 }
